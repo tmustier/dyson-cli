@@ -387,9 +387,10 @@ def fan_speed(speed: str, device: Optional[str]):
 
 @fan.command("oscillate")
 @click.argument("state", type=click.Choice(["on", "off"]))
+@click.option("--angle", "-a", type=int, help="Oscillation range in degrees (45, 90, 180, or 350)")
 @click.option("--device", "-d", help="Device name or serial")
-def fan_oscillate(state: str, device: Optional[str]):
-    """Enable or disable oscillation."""
+def fan_oscillate(state: str, angle: Optional[int], device: Optional[str]):
+    """Enable or disable oscillation. Use --angle to set range (e.g., 90 for 90 degrees)."""
     device_config = get_device(device)
     if not device_config:
         console.print("[red]No device found.[/red]")
@@ -416,9 +417,21 @@ def fan_oscillate(state: str, device: Optional[str]):
         dyson_device.connect(ip)
         time.sleep(1)
 
-        enable = state == "on"
-        dyson_device.enable_oscillation() if enable else dyson_device.disable_oscillation()
-        console.print(f"[green]✓ Oscillation {'enabled' if enable else 'disabled'}[/green]")
+        if state == "on":
+            if angle:
+                # Center the oscillation around current position (or 180 degrees)
+                center = 180
+                half = angle // 2
+                angle_low = max(5, center - half)
+                angle_high = min(355, center + half)
+                dyson_device.enable_oscillation(angle_low=angle_low, angle_high=angle_high)
+                console.print(f"[green]✓ Oscillation enabled ({angle}° range)[/green]")
+            else:
+                dyson_device.enable_oscillation()
+                console.print("[green]✓ Oscillation enabled[/green]")
+        else:
+            dyson_device.disable_oscillation()
+            console.print("[green]✓ Oscillation disabled[/green]")
 
         dyson_device.disconnect()
 
