@@ -365,13 +365,14 @@ def fan_speed(speed: str, device: Optional[str]):
         time.sleep(1)
 
         if speed.lower() == "auto":
-            dyson_device.set_speed(0)  # 0 = auto in libdyson
-            console.print(f"[green]✓ Fan set to auto[/green]")
+            dyson_device.enable_auto_mode()
+            console.print("[green]✓ Fan set to auto[/green]")
         else:
             speed_int = int(speed)
             if not 1 <= speed_int <= 10:
                 console.print("[red]Speed must be 1-10 or 'auto'[/red]")
                 sys.exit(1)
+            dyson_device.disable_auto_mode()
             dyson_device.set_speed(speed_int)
             console.print(f"[green]✓ Fan speed set to {speed_int}[/green]")
 
