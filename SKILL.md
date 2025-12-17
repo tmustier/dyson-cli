@@ -1,11 +1,14 @@
-# Dyson CLI Skill
+---
+name: dyson-cli
+description: Control Dyson air purifiers, fans, and heaters via local MQTT. Use when asked to control Dyson devices, adjust fan speed, set temperature/heat, enable oscillation, or check room temperature/humidity. Requires being on the same WiFi network as the device.
+---
 
-Control Dyson air purifiers, fans, and heaters from the command line.
+# Dyson CLI
 
 ## Prerequisites
 
-1. The CLI must be installed and configured. See the [README](README.md) for installation and device setup.
-2. **You must be on the same WiFi network as the Dyson device.** This uses local MQTT - it won't work remotely.
+1. CLI installed at `~/dyson-cli` with venv
+2. **Must be on same WiFi as the Dyson** - local MQTT only, won't work remotely
 
 **Quick check:**
 ```bash
