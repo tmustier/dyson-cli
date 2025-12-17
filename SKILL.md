@@ -4,7 +4,8 @@ Control Dyson air purifiers, fans, and heaters from the command line.
 
 ## Prerequisites
 
-The CLI must be installed and configured. See the [README](README.md) for installation and device setup.
+1. The CLI must be installed and configured. See the [README](README.md) for installation and device setup.
+2. **You must be on the same WiFi network as the Dyson device.** This uses local MQTT - it won't work remotely.
 
 **Quick check:**
 ```bash

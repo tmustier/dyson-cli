@@ -147,6 +147,8 @@ The IP address is auto-discovered on first `dyson status` call via mDNS.
 
 Dyson devices communicate locally via MQTT on port 1883. After initial setup (which requires your Dyson account), all control happens directly on your local network - no cloud required.
 
+**Important:** You must be connected to the same WiFi network as your Dyson device. The CLI will not work remotely or from a different network.
+
 ## Credits
 
 Built on top of [libdyson-neon](https://github.com/libdyson-wg/libdyson-neon), the actively maintained fork of libdyson that powers the Home Assistant Dyson integration.
