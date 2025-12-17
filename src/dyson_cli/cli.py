@@ -26,6 +26,7 @@ DEVICE_TYPE_NAMES = {
     "475": "Dyson Pure Cool Link Tower",
     "520": "Dyson Pure Cool Desk",
     "527": "Dyson Pure Hot+Cool",
+    "527K": "Dyson Purifier Hot+Cool Formaldehyde (HP09)",
     "438": "Dyson Pure Cool Tower",
     "358": "Dyson Pure Humidify+Cool",
     "358E": "Dyson Pure Humidify+Cool Formaldehyde",
@@ -50,15 +51,15 @@ def cli():
 @click.option("--email", prompt="Dyson account email", help="Your Dyson account email")
 @click.option(
     "--region",
-    type=click.Choice(["US", "CA", "CN", "EU", "AU", "RU"]),
-    default="EU",
-    help="Dyson account region",
+    type=click.Choice(["US", "CA", "CN", "GB", "AU", "DE", "FR", "IT", "ES", "NL", "IE"]),
+    default="GB",
+    help="Dyson account region (country code)",
 )
 def setup(email: str, region: str):
     """Set up device credentials via Dyson account."""
     try:
-        from libdyson.cloud import DysonAccount
-        from libdyson.exceptions import DysonLoginFailure
+        from libdyson.cloud.account import DysonAccount
+        from libdyson.exceptions import DysonLoginFailure, DysonServerError
     except ImportError:
         console.print("[red]Error: libdyson not installed. Run: pip install libdyson[/red]")
         sys.exit(1)
@@ -67,18 +68,26 @@ def setup(email: str, region: str):
 
     console.print(f"Sending OTP to {email}...")
     try:
-        account.login_email_otp(email, region)
+        verify_func = account.login_email_otp(email, region)
+    except DysonServerError as e:
+        console.print(f"[red]Server error. Try a different region (e.g., GB, US, DE)[/red]")
+        sys.exit(1)
     except DysonLoginFailure as e:
         console.print(f"[red]Login failed: {e}[/red]")
         sys.exit(1)
 
+    console.print("[green]OTP sent! Check your email.[/green]")
     otp = click.prompt("Enter the OTP code from your email")
+    password = click.prompt("Enter your Dyson account password", hide_input=True)
 
-    console.print("Verifying OTP...")
+    console.print("Verifying...")
     try:
-        account.verify_email_otp(email, otp, region)
+        verify_func(otp, password)
     except DysonLoginFailure as e:
         console.print(f"[red]Verification failed: {e}[/red]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
         sys.exit(1)
 
     console.print("Fetching devices...")

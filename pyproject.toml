@@ -27,7 +27,7 @@ classifiers = [
 ]
 requires-python = ">=3.9"
 dependencies = [
-    "libdyson>=0.8.11",
+    "libdyson-neon>=1.6.0",
     "click>=8.0",
     "rich>=13.0",
 ]
