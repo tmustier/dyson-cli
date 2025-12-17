@@ -228,41 +228,78 @@ def status(device: Optional[str], as_json: bool):
         dyson_device.connect(ip)
         time.sleep(2)  # Wait for state update
 
-        state = {
+        # Raw state for JSON output
+        raw_state = {
             "name": device_config["name"],
             "serial": device_config["serial"],
             "type": get_device_type_name(device_config["product_type"]),
             "connected": dyson_device.is_connected,
-            "power": dyson_device.is_on if hasattr(dyson_device, "is_on") else None,
-            "fan_speed": getattr(dyson_device, "speed", None),
+            "is_on": dyson_device.is_on if hasattr(dyson_device, "is_on") else None,
+            "auto_mode": getattr(dyson_device, "auto_mode", None),
+            "speed": getattr(dyson_device, "speed", None),
             "oscillation": getattr(dyson_device, "oscillation", None),
+            "oscillation_angle_low": getattr(dyson_device, "oscillation_angle_low", None),
+            "oscillation_angle_high": getattr(dyson_device, "oscillation_angle_high", None),
             "night_mode": getattr(dyson_device, "night_mode", None),
+            "heat_mode_is_on": getattr(dyson_device, "heat_mode_is_on", None),
+            "heat_target": getattr(dyson_device, "heat_target", None),
+            "temperature": getattr(dyson_device, "temperature", None),
+            "humidity": getattr(dyson_device, "humidity", None),
         }
-
-        # Hot+Cool specific
-        if hasattr(dyson_device, "heat_mode"):
-            state["heat_mode"] = dyson_device.heat_mode
-        if hasattr(dyson_device, "heat_target"):
-            state["heat_target"] = dyson_device.heat_target
-
-        # Environmental data
-        if hasattr(dyson_device, "temperature"):
-            state["temperature"] = dyson_device.temperature
-        if hasattr(dyson_device, "humidity"):
-            state["humidity"] = dyson_device.humidity
 
         dyson_device.disconnect()
 
         if as_json:
-            console.print(json.dumps(state, indent=2))
+            console.print(json.dumps(raw_state, indent=2))
         else:
-            table = Table(title=f"Status: {state['name']}")
-            table.add_column("Property", style="cyan")
-            table.add_column("Value", style="green")
+            table = Table(title=f"{device_config['name']}")
+            table.add_column("", style="cyan")
+            table.add_column("", style="green")
 
-            for key, value in state.items():
-                if value is not None:
-                    table.add_row(key.replace("_", " ").title(), str(value))
+            # Connected
+            connected = "[green]✓[/green]" if raw_state["connected"] else "[red]✗[/red]"
+            table.add_row("Connected", connected)
+
+            # Fan speed
+            if raw_state.get("auto_mode"):
+                fan_display = "Auto"
+            elif raw_state.get("speed") is not None:
+                fan_display = str(raw_state["speed"])
+            else:
+                fan_display = "[dim]Off[/dim]"
+            table.add_row("Fan", fan_display)
+
+            # Oscillation
+            if raw_state.get("oscillation"):
+                angle_low = raw_state.get("oscillation_angle_low", 0)
+                angle_high = raw_state.get("oscillation_angle_high", 0)
+                angle_range = angle_high - angle_low
+                osc_display = f"{angle_range}° ({angle_low}°–{angle_high}°)"
+            else:
+                osc_display = "[dim]Off[/dim]"
+            table.add_row("Oscillation", osc_display)
+
+            # Heat (Hot+Cool models)
+            if raw_state.get("heat_mode_is_on") is not None:
+                if raw_state["heat_mode_is_on"]:
+                    target_k = raw_state.get("heat_target", 293)
+                    target_c = target_k - 273
+                    heat_display = f"On → {target_c:.0f}°C"
+                else:
+                    heat_display = "[dim]Off[/dim]"
+                table.add_row("Heat", heat_display)
+
+            # Night mode
+            night = "[green]✓[/green]" if raw_state.get("night_mode") else "[dim]✗[/dim]"
+            table.add_row("Night Mode", night)
+
+            # Environment
+            if raw_state.get("temperature") is not None:
+                temp_c = raw_state["temperature"] - 273
+                table.add_row("Temperature", f"{temp_c:.1f}°C")
+            
+            if raw_state.get("humidity") is not None:
+                table.add_row("Humidity", f"{raw_state['humidity']}%")
 
             console.print(table)
 
