@@ -120,7 +120,8 @@ def setup(email: str, region: str):
 
 
 @cli.command("list")
-def list_devices():
+@click.option("--check", "-c", is_flag=True, help="Check if devices are reachable")
+def list_devices(check: bool):
     """List configured devices."""
     config = load_config()
     devices = config.get("devices", [])
@@ -132,18 +133,38 @@ def list_devices():
     table = Table(title="Configured Devices")
     table.add_column("Name", style="cyan")
     table.add_column("Type", style="green")
-    table.add_column("Serial", style="dim")
+    table.add_column("IP", style="dim")
     table.add_column("Default", style="yellow")
+    if check:
+        table.add_column("Status", style="green")
 
     default = config.get("default_device")
     for device in devices:
         is_default = "✓" if device.get("name") == default else ""
-        table.add_row(
+        ip = device.get("ip", "Not configured")
+        
+        status = None
+        if check and device.get("ip"):
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            try:
+                sock.connect((device["ip"], 1883))
+                status = "[green]Online[/green]"
+            except:
+                status = "[red]Offline[/red]"
+            finally:
+                sock.close()
+        
+        row = [
             device.get("name", "Unknown"),
             get_device_type_name(device.get("product_type", "")),
-            device.get("serial", "Unknown"),
+            ip,
             is_default,
-        )
+        ]
+        if check:
+            row.append(status or "[dim]Skipped[/dim]")
+        table.add_row(*row)
 
     console.print(table)
 
@@ -573,6 +594,40 @@ def set_default(name: str):
     else:
         console.print(f"[red]Device '{name}' not found.[/red]")
         sys.exit(1)
+
+
+@cli.command("remove")
+@click.argument("name")
+@click.option("--force", "-f", is_flag=True, help="Skip confirmation")
+def remove_device(name: str, force: bool):
+    """Remove a device from the config."""
+    config = load_config()
+    devices = config.get("devices", [])
+    
+    # Find device
+    device = None
+    for d in devices:
+        if d.get("name", "").lower() == name.lower() or d.get("serial", "").lower() == name.lower():
+            device = d
+            break
+    
+    if not device:
+        console.print(f"[red]Device '{name}' not found.[/red]")
+        sys.exit(1)
+    
+    if not force:
+        if not click.confirm(f"Remove {device.get('name')} ({device.get('serial')})?"):
+            console.print("Cancelled.")
+            return
+    
+    config["devices"] = [d for d in devices if d.get("serial") != device.get("serial")]
+    
+    # Update default if needed
+    if config.get("default_device") == device.get("name"):
+        config["default_device"] = config["devices"][0]["name"] if config["devices"] else None
+    
+    save_config(config)
+    console.print(f"[green]✓ Removed {device.get('name')}[/green]")
 
 
 if __name__ == "__main__":
