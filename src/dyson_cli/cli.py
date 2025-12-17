@@ -267,7 +267,7 @@ def status(device: Optional[str], as_json: bool):
                 fan_display = str(raw_state["speed"])
             else:
                 fan_display = "[dim]Off[/dim]"
-            table.add_row("Fan", fan_display)
+            table.add_row("Fan Speed", fan_display)
 
             # Oscillation
             if raw_state.get("oscillation"):
