@@ -289,10 +289,6 @@ def status(device: Optional[str], as_json: bool):
                     heat_display = "[dim]Off[/dim]"
                 table.add_row("Heat", heat_display)
 
-            # Night mode
-            night = "[green]✓[/green]" if raw_state.get("night_mode") else "[dim]✗[/dim]"
-            table.add_row("Night Mode", night)
-
             # Environment
             if raw_state.get("temperature") is not None:
                 temp_c = raw_state["temperature"] - 273
@@ -300,6 +296,10 @@ def status(device: Optional[str], as_json: bool):
             
             if raw_state.get("humidity") is not None:
                 table.add_row("Humidity", f"{raw_state['humidity']}%")
+
+            # Night mode (quieter + dims display)
+            night = "[green]✓[/green]" if raw_state.get("night_mode") else "[dim]Off[/dim]"
+            table.add_row("Night Mode", night)
 
             console.print(table)
 
