@@ -5,8 +5,8 @@
     "project_name": "dyson-cli",
     "created": "2026-01-01",
     "last_updated": "2026-01-01",
-    "total_features": 7,
-    "completed_features": 7
+    "total_features": 8,
+    "completed_features": 8
   },
   "features": [
     {
@@ -122,6 +122,37 @@
         "sessions": [1],
         "files": ["src/dyson_cli/cli.py"],
         "decisions": []
+      }
+    },
+    {
+      "id": "typing-001",
+      "name": "Strict type checking with pyright",
+      "description": "Add comprehensive type annotations and pass pyright strict mode",
+      "steps": [
+        "Add pyrightconfig.json with strict mode",
+        "Create TypedDict types for Config and DeviceConfig",
+        "Add type annotations to all CLI functions",
+        "Create type stubs for libdyson third-party library",
+        "Fix all pyright errors to reach 0 errors, 0 warnings"
+      ],
+      "passes": true,
+      "notes": "Created stubs/libdyson/ for third-party types. TypedDict with NotRequired for optional fields.",
+      "history": {
+        "sessions": [1],
+        "files": [
+          "pyrightconfig.json",
+          "src/dyson_cli/cli.py",
+          "src/dyson_cli/config.py",
+          "stubs/libdyson/__init__.pyi",
+          "stubs/libdyson/cloud/account.pyi",
+          "stubs/libdyson/discovery/__init__.pyi",
+          "stubs/libdyson/exceptions.pyi"
+        ],
+        "decisions": [
+          "Use TypedDict with NotRequired for optional fields",
+          "Create custom stubs for libdyson rather than type:ignore",
+          "Demote reportUnknown* to warnings for third-party noise"
+        ]
       }
     }
   ]

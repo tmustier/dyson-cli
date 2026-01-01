@@ -1,10 +1,11 @@
 """Main CLI entry point for dyson-cli."""
 
 import json
-import os
 import sys
 import time
-from typing import Optional
+from contextlib import AbstractContextManager, nullcontext
+from typing import Any, Callable, TypeVar
+
 
 import click
 from rich.console import Console
@@ -12,6 +13,7 @@ from rich.table import Table
 
 from .config import (
     CONFIG_FILE,
+    DeviceConfig,
     get_device,
     load_config,
     save_config,
@@ -25,30 +27,31 @@ EXIT_USAGE_ERROR = 2
 EXIT_CONNECTION_ERROR = 3
 EXIT_DEVICE_NOT_FOUND = 4
 
+F = TypeVar("F", bound=Callable[..., Any])
+
 
 class CLIContext:
     """Shared CLI context for global options."""
 
-    def __init__(self):
-        self.quiet = False
-        self.verbose = False
-        self.dry_run = False
-        self.console = Console()
+    def __init__(self) -> None:
+        self.quiet: bool = False
+        self.verbose: bool = False
+        self.dry_run: bool = False
+        self.console: Console = Console()
 
-    def print(self, *args, **kwargs):
+    def print(self, *args: Any, **kwargs: Any) -> None:
         """Print unless quiet mode is enabled."""
         if not self.quiet:
             self.console.print(*args, **kwargs)
 
-    def print_verbose(self, *args, **kwargs):
+    def print_verbose(self, *args: Any, **kwargs: Any) -> None:
         """Print only in verbose mode."""
         if self.verbose and not self.quiet:
             self.console.print(*args, style="dim", **kwargs)
 
-    def status(self, message: str):
+    def status(self, message: str) -> AbstractContextManager[Any]:
         """Return a status context manager for progress indication."""
         if self.quiet:
-            from contextlib import nullcontext
             return nullcontext()
         return self.console.status(message)
 
@@ -59,27 +62,31 @@ pass_context = click.make_pass_decorator(CLIContext, ensure=True)
 console = Console()
 
 
-def device_option(f):
+def device_option(f: F) -> F:
     """Decorator for --device/-d option with DYSON_DEVICE env var fallback."""
-    return click.option(
+    decorated: F = click.option(
         "--device",
         "-d",
         envvar="DYSON_DEVICE",
         help="Device name or serial (env: DYSON_DEVICE)",
     )(f)
+    return decorated
 
 
-def dry_run_option(f):
+def dry_run_option(f: F) -> F:
     """Decorator for --dry-run/-n option."""
-    return click.option(
+    decorated: F = click.option(
         "--dry-run",
         "-n",
         is_flag=True,
         help="Show what would happen without executing",
     )(f)
+    return decorated
 
 
-def validate_speed(ctx, param, value):
+def validate_speed(
+    ctx: click.Context, param: click.Parameter, value: str | None
+) -> str | None:
     """Validate speed argument early (before connecting)."""
     if value is None:
         return value
@@ -126,7 +133,7 @@ def get_device_type_name(product_type: str) -> str:
     help="Disable colored output",
 )
 @click.pass_context
-def cli(ctx, quiet: bool, verbose: bool, no_color: bool):
+def cli(ctx: click.Context, quiet: bool, verbose: bool, no_color: bool) -> None:
     """Control Dyson devices from the command line.
 
     Environment variables:
@@ -134,10 +141,11 @@ def cli(ctx, quiet: bool, verbose: bool, no_color: bool):
       NO_COLOR      Disable colors when set
     """
     ctx.ensure_object(CLIContext)
-    ctx.obj.quiet = quiet
-    ctx.obj.verbose = verbose
+    cli_ctx: CLIContext = ctx.obj
+    cli_ctx.quiet = quiet
+    cli_ctx.verbose = verbose
     if no_color:
-        ctx.obj.console = Console(no_color=True)
+        cli_ctx.console = Console(no_color=True)
 
 
 @cli.command()
@@ -194,7 +202,7 @@ def setup(email: str, region: str):
     config["devices"] = []
 
     for device in devices:
-        device_info = {
+        device_info: DeviceConfig = {
             "name": device.name,
             "serial": device.serial,
             "credential": device.credential,
@@ -237,14 +245,15 @@ def list_devices(check: bool):
         ip = device.get("ip", "Not configured")
         
         status = None
-        if check and device.get("ip"):
+        device_ip = device.get("ip")
+        if check and device_ip:
             import socket
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(2)
             try:
-                sock.connect((device["ip"], 1883))
+                sock.connect((device_ip, 1883))
                 status = "[green]Online[/green]"
-            except:
+            except Exception:
                 status = "[red]Offline[/red]"
             finally:
                 sock.close()
@@ -266,7 +275,7 @@ def list_devices(check: bool):
 @device_option
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @pass_context
-def status(ctx: CLIContext, device: Optional[str], as_json: bool):
+def status(ctx: CLIContext, device: str | None, as_json: bool):
     """Show device status."""
     device_config = get_device(device)
     if not device_config:
@@ -367,8 +376,8 @@ def status(ctx: CLIContext, device: Optional[str], as_json: bool):
 
             # Oscillation
             if raw_state.get("oscillation"):
-                angle_low = raw_state.get("oscillation_angle_low", 0)
-                angle_high = raw_state.get("oscillation_angle_high", 0)
+                angle_low = int(raw_state.get("oscillation_angle_low") or 0)
+                angle_high = int(raw_state.get("oscillation_angle_high") or 0)
                 angle_range = angle_high - angle_low
                 osc_display = f"{angle_range}° ({angle_low}°–{angle_high}°)"
             else:
@@ -378,7 +387,7 @@ def status(ctx: CLIContext, device: Optional[str], as_json: bool):
             # Heat (Hot+Cool models)
             if raw_state.get("heat_mode_is_on") is not None:
                 if raw_state["heat_mode_is_on"]:
-                    target_k = raw_state.get("heat_target", 293)
+                    target_k = int(raw_state.get("heat_target") or 293)
                     target_c = target_k - 273
                     heat_display = f"On → {target_c:.0f}°C"
                 else:
@@ -386,8 +395,9 @@ def status(ctx: CLIContext, device: Optional[str], as_json: bool):
                 table.add_row("Heat", heat_display)
 
             # Environment
-            if raw_state.get("temperature") is not None:
-                temp_c = raw_state["temperature"] - 273
+            temp = raw_state.get("temperature")
+            if temp is not None:
+                temp_c = int(temp) - 273
                 table.add_row("Temperature", f"{temp_c:.1f}°C")
 
             if raw_state.get("humidity") is not None:
@@ -408,7 +418,7 @@ def status(ctx: CLIContext, device: Optional[str], as_json: bool):
 @device_option
 @dry_run_option
 @pass_context
-def on(ctx: CLIContext, device: Optional[str], dry_run: bool):
+def on(ctx: CLIContext, device: str | None, dry_run: bool):
     """Turn device on."""
     _control_power(ctx, device, power_on=True, dry_run=dry_run)
 
@@ -417,12 +427,12 @@ def on(ctx: CLIContext, device: Optional[str], dry_run: bool):
 @device_option
 @dry_run_option
 @pass_context
-def off(ctx: CLIContext, device: Optional[str], dry_run: bool):
+def off(ctx: CLIContext, device: str | None, dry_run: bool):
     """Turn device off."""
     _control_power(ctx, device, power_on=False, dry_run=dry_run)
 
 
-def _control_power(ctx: CLIContext, device_name: Optional[str], power_on: bool, dry_run: bool = False):
+def _control_power(ctx: CLIContext, device_name: str | None, power_on: bool, dry_run: bool = False):
     """Control device power."""
     device_config = get_device(device_name)
     if not device_config:
@@ -483,7 +493,7 @@ def fan():
 @device_option
 @dry_run_option
 @pass_context
-def fan_speed(ctx: CLIContext, speed: str, device: Optional[str], dry_run: bool):
+def fan_speed(ctx: CLIContext, speed: str, device: str | None, dry_run: bool):
     """Set fan speed (1-10 or 'auto')."""
     device_config = get_device(device)
     if not device_config:
@@ -538,7 +548,7 @@ def fan_speed(ctx: CLIContext, speed: str, device: Optional[str], dry_run: bool)
 @device_option
 @dry_run_option
 @pass_context
-def fan_oscillate(ctx: CLIContext, state: str, angle: Optional[int], device: Optional[str], dry_run: bool):
+def fan_oscillate(ctx: CLIContext, state: str, angle: int | None, device: str | None, dry_run: bool):
     """Enable or disable oscillation. Use --angle to set range (e.g., 90 for 90 degrees)."""
     device_config = get_device(device)
     if not device_config:
@@ -605,7 +615,7 @@ def heat():
 @device_option
 @dry_run_option
 @pass_context
-def heat_on(ctx: CLIContext, device: Optional[str], dry_run: bool):
+def heat_on(ctx: CLIContext, device: str | None, dry_run: bool):
     """Enable heat mode."""
     _control_heat(ctx, device, enable=True, dry_run=dry_run)
 
@@ -614,12 +624,12 @@ def heat_on(ctx: CLIContext, device: Optional[str], dry_run: bool):
 @device_option
 @dry_run_option
 @pass_context
-def heat_off(ctx: CLIContext, device: Optional[str], dry_run: bool):
+def heat_off(ctx: CLIContext, device: str | None, dry_run: bool):
     """Disable heat mode."""
     _control_heat(ctx, device, enable=False, dry_run=dry_run)
 
 
-def _control_heat(ctx: CLIContext, device_name: Optional[str], enable: bool, dry_run: bool = False):
+def _control_heat(ctx: CLIContext, device_name: str | None, enable: bool, dry_run: bool = False):
     """Control heat mode."""
     device_config = get_device(device_name)
     if not device_config:
@@ -672,7 +682,9 @@ def _control_heat(ctx: CLIContext, device_name: Optional[str], enable: bool, dry
         sys.exit(EXIT_CONNECTION_ERROR)
 
 
-def validate_temperature(ctx, param, value):
+def validate_temperature(
+    ctx: click.Context, param: click.Parameter, value: int | None
+) -> int | None:
     """Validate temperature argument early."""
     if value is None:
         return value
@@ -686,7 +698,7 @@ def validate_temperature(ctx, param, value):
 @device_option
 @dry_run_option
 @pass_context
-def heat_target(ctx: CLIContext, temperature: int, device: Optional[str], dry_run: bool):
+def heat_target(ctx: CLIContext, temperature: int, device: str | None, dry_run: bool):
     """Set target temperature in Celsius (1-37)."""
     device_config = get_device(device)
     if not device_config:
@@ -739,7 +751,7 @@ def heat_target(ctx: CLIContext, temperature: int, device: Optional[str], dry_ru
 @device_option
 @dry_run_option
 @pass_context
-def night(ctx: CLIContext, state: str, device: Optional[str], dry_run: bool):
+def night(ctx: CLIContext, state: str, device: str | None, dry_run: bool):
     """Enable or disable night mode."""
     device_config = get_device(device)
     if not device_config:

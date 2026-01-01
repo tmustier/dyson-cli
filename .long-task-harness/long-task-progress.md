@@ -3,22 +3,26 @@
 ## Project Overview
 
 **Started**: 2026-01-01
-**Status**: In Progress
+**Status**: Complete
 **Repository**: https://github.com/tmustier/dyson-cli
 
 ### Project Goals
 
-CLI refinements following cli-guidelines best practices. Improving the command-line UX with:
+CLI refinements following cli-guidelines best practices:
 - Global flags (--quiet, --verbose, --no-color)
 - Environment variable support (DYSON_DEVICE)
 - Dry-run mode for safe previews
 - Differentiated exit codes
 - Progress indicators for slow operations
+- Strict type checking with pyright
 
 ### Key Decisions
 
 - **[D1]** Use CLIContext class pattern to share global state across commands (Session 1)
 - **[D2]** Exit codes: 0=success, 1=error, 2=usage, 3=connection, 4=not found (Session 1)
+- **[D3]** Use TypedDict for Config and DeviceConfig (Session 1)
+- **[D4]** Create libdyson type stubs rather than using type:ignore (Session 1)
+- **[D5]** Demote third-party unknown type errors to warnings in pyright config (Session 1)
 
 ---
 
@@ -34,6 +38,7 @@ CLI refinements following cli-guidelines best practices. Improving the command-l
 - Differentiated exit codes
 - Early validation for speed/temperature
 - Progress indicators for slow operations
+- Strict type checking with pyright (0 errors, 0 warnings)
 
 ### What's Not Working
 - Nothing currently blocked
@@ -45,16 +50,20 @@ CLI refinements following cli-guidelines best practices. Improving the command-l
 
 ## Session Log
 
-### Session 1 | 2026-01-01 | Commits: pending
+### Session 1 | 2026-01-01 | Commits: 97898f0..e654e0f
 
 #### Metadata
-- **Features**: cli-001 (completed), cli-002 through cli-007 (in progress)
+- **Features**: cli-001 through cli-007 (all completed), typing (completed)
 - **Files Changed**:
-  - `src/dyson_cli/cli.py` - adding CLIContext, global flags, exit codes
+  - `src/dyson_cli/cli.py` - CLIContext, global flags, exit codes, type annotations
+  - `src/dyson_cli/config.py` - TypedDict types
+  - `pyrightconfig.json` - strict type checking config
+  - `stubs/libdyson/*` - type stubs for third-party library
   - `.long-task-harness/*` - initialized harness
+- **Commit Summary**: `feat: improve CLI UX`, `feat: add strict type checking`
 
 #### Goal
-Implement CLI refinements per create-cli skill review
+Implement CLI refinements per create-cli skill review + add strict typing
 
 #### Accomplished
 - [x] Created refinements branch
@@ -67,19 +76,29 @@ Implement CLI refinements per create-cli skill review
 - [x] Updated all commands to use CLIContext with proper exit codes
 - [x] Added progress indicators via ctx.status() for slow operations
 - [x] Added early validation for speed and temperature arguments
+- [x] Added strict pyright type checking
+- [x] Created TypedDict types for Config and DeviceConfig
+- [x] Created type stubs for libdyson third-party library
+- [x] Added type annotations to all CLI functions
 
 #### Decisions
 - **[D1]** CLIContext class holds global state + provides print/status methods
 - **[D2]** Keep legacy `console` variable for backward compatibility during refactor
+- **[D3]** Use TypedDict with NotRequired for optional fields (ip in DeviceConfig)
+- **[D4]** Create stubs/libdyson/ for third-party types rather than type:ignore
+- **[D5]** Demote reportUnknown* errors to warnings for third-party library noise
 
 #### Context & Learnings
 - Reviewed CLI against steipete/agent-scripts/skills/create-cli guidelines
 - click.pass_context + make_pass_decorator pattern for sharing state
+- TypedDict with total=False causes access issues; use NotRequired instead
+- libdyson has no type stubs; created custom stubs in stubs/ directory
+- Pre-commit hook runs pyright automatically on commits
 
 #### Next Steps
-1. Add DYSON_DEVICE env var to device option → cli-002
-2. Add --dry-run flag to control commands → cli-003
-3. Update commands to use CLIContext → cli-007
+1. Merge refinements branch to main
+2. Consider adding tests
+3. Update README with new CLI options
 
 ---
 
