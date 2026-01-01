@@ -1,0 +1,128 @@
+{
+  "version": "2.0",
+  "description": "CLI refinements following cli-guidelines best practices",
+  "metadata": {
+    "project_name": "dyson-cli",
+    "created": "2026-01-01",
+    "last_updated": "2026-01-01",
+    "total_features": 7,
+    "completed_features": 7
+  },
+  "features": [
+    {
+      "id": "cli-001",
+      "name": "Global flags (--quiet, --verbose, --no-color)",
+      "description": "Add standard CLI global flags for output control",
+      "steps": [
+        "Add --quiet/-q flag to suppress non-essential output",
+        "Add --verbose/-v flag for connection details",
+        "Add --no-color flag and respect NO_COLOR env var",
+        "Create CLIContext class to share state across commands"
+      ],
+      "passes": true,
+      "notes": "Implemented via Click context and CLIContext class",
+      "history": {
+        "sessions": [1],
+        "files": ["src/dyson_cli/cli.py"],
+        "decisions": ["Use CLIContext class with print/print_verbose/status methods"]
+      }
+    },
+    {
+      "id": "cli-002",
+      "name": "DYSON_DEVICE env var support",
+      "description": "Allow default device via environment variable",
+      "steps": [
+        "Read DYSON_DEVICE env var as fallback for -d flag",
+        "Document in --help output"
+      ],
+      "passes": true,
+      "notes": "Implemented via device_option decorator with envvar",
+      "history": {
+        "sessions": [1],
+        "files": ["src/dyson_cli/cli.py"],
+        "decisions": []
+      }
+    },
+    {
+      "id": "cli-003",
+      "name": "--dry-run flag for control commands",
+      "description": "Preview device changes without executing",
+      "steps": [
+        "Add --dry-run/-n flag to control commands",
+        "Show what would happen without connecting"
+      ],
+      "passes": true,
+      "notes": "Implemented via dry_run_option decorator",
+      "history": {
+        "sessions": [1],
+        "files": ["src/dyson_cli/cli.py"],
+        "decisions": []
+      }
+    },
+    {
+      "id": "cli-004",
+      "name": "Differentiated exit codes",
+      "description": "Use distinct exit codes for different failure types",
+      "steps": [
+        "Define exit code constants (0=success, 1=error, 2=usage, 3=connection, 4=not found)",
+        "Apply appropriate exit codes throughout CLI"
+      ],
+      "passes": true,
+      "notes": "EXIT_SUCCESS=0, EXIT_ERROR=1, EXIT_USAGE_ERROR=2, EXIT_CONNECTION_ERROR=3, EXIT_DEVICE_NOT_FOUND=4",
+      "history": {
+        "sessions": [1],
+        "files": ["src/dyson_cli/cli.py"],
+        "decisions": []
+      }
+    },
+    {
+      "id": "cli-005",
+      "name": "Early validation for speed argument",
+      "description": "Validate speed argument before connecting to device",
+      "steps": [
+        "Create Click callback for speed validation",
+        "Fail fast with usage error before connection attempt"
+      ],
+      "passes": true,
+      "notes": "validate_speed callback on argument",
+      "history": {
+        "sessions": [1],
+        "files": ["src/dyson_cli/cli.py"],
+        "decisions": []
+      }
+    },
+    {
+      "id": "cli-006",
+      "name": "Progress indicators for slow operations",
+      "description": "Show spinner during connection and network operations",
+      "steps": [
+        "Use Rich console.status for connection steps",
+        "Integrate with quiet mode to suppress when needed"
+      ],
+      "passes": true,
+      "notes": "CLIContext.status() returns console.status or nullcontext based on quiet flag",
+      "history": {
+        "sessions": [1],
+        "files": ["src/dyson_cli/cli.py"],
+        "decisions": []
+      }
+    },
+    {
+      "id": "cli-007",
+      "name": "Update commands to use CLIContext",
+      "description": "Refactor all commands to use the new context pattern",
+      "steps": [
+        "Update status command with context",
+        "Update control commands (on/off/fan/heat) with context",
+        "Use appropriate exit codes in all error paths"
+      ],
+      "passes": true,
+      "notes": "All commands refactored to use @pass_context and ctx.print",
+      "history": {
+        "sessions": [1],
+        "files": ["src/dyson_cli/cli.py"],
+        "decisions": []
+      }
+    }
+  ]
+}

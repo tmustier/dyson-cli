@@ -1,6 +1,7 @@
 """Main CLI entry point for dyson-cli."""
 
 import json
+import os
 import sys
 import time
 from typing import Optional
@@ -17,7 +18,81 @@ from .config import (
     set_default_device,
 )
 
+# Exit codes (following CLI guidelines)
+EXIT_SUCCESS = 0
+EXIT_ERROR = 1
+EXIT_USAGE_ERROR = 2
+EXIT_CONNECTION_ERROR = 3
+EXIT_DEVICE_NOT_FOUND = 4
+
+
+class CLIContext:
+    """Shared CLI context for global options."""
+
+    def __init__(self):
+        self.quiet = False
+        self.verbose = False
+        self.dry_run = False
+        self.console = Console()
+
+    def print(self, *args, **kwargs):
+        """Print unless quiet mode is enabled."""
+        if not self.quiet:
+            self.console.print(*args, **kwargs)
+
+    def print_verbose(self, *args, **kwargs):
+        """Print only in verbose mode."""
+        if self.verbose and not self.quiet:
+            self.console.print(*args, style="dim", **kwargs)
+
+    def status(self, message: str):
+        """Return a status context manager for progress indication."""
+        if self.quiet:
+            from contextlib import nullcontext
+            return nullcontext()
+        return self.console.status(message)
+
+
+pass_context = click.make_pass_decorator(CLIContext, ensure=True)
+
+# Legacy console for backward compatibility during transition
 console = Console()
+
+
+def device_option(f):
+    """Decorator for --device/-d option with DYSON_DEVICE env var fallback."""
+    return click.option(
+        "--device",
+        "-d",
+        envvar="DYSON_DEVICE",
+        help="Device name or serial (env: DYSON_DEVICE)",
+    )(f)
+
+
+def dry_run_option(f):
+    """Decorator for --dry-run/-n option."""
+    return click.option(
+        "--dry-run",
+        "-n",
+        is_flag=True,
+        help="Show what would happen without executing",
+    )(f)
+
+
+def validate_speed(ctx, param, value):
+    """Validate speed argument early (before connecting)."""
+    if value is None:
+        return value
+    if value.lower() == "auto":
+        return value
+    try:
+        speed_int = int(value)
+        if not 1 <= speed_int <= 10:
+            raise click.BadParameter("Speed must be 1-10 or 'auto'")
+        return value
+    except ValueError:
+        raise click.BadParameter("Speed must be a number 1-10 or 'auto'")
+
 
 # Device type mapping (from libdyson)
 DEVICE_TYPE_NAMES = {
@@ -42,9 +117,27 @@ def get_device_type_name(product_type: str) -> str:
 
 @click.group()
 @click.version_option()
-def cli():
-    """Control Dyson devices from the command line."""
-    pass
+@click.option("--quiet", "-q", is_flag=True, help="Suppress non-essential output")
+@click.option("--verbose", "-v", is_flag=True, help="Show connection details and timing")
+@click.option(
+    "--no-color",
+    is_flag=True,
+    envvar="NO_COLOR",
+    help="Disable colored output",
+)
+@click.pass_context
+def cli(ctx, quiet: bool, verbose: bool, no_color: bool):
+    """Control Dyson devices from the command line.
+
+    Environment variables:
+      DYSON_DEVICE  Default device name (overridden by -d)
+      NO_COLOR      Disable colors when set
+    """
+    ctx.ensure_object(CLIContext)
+    ctx.obj.quiet = quiet
+    ctx.obj.verbose = verbose
+    if no_color:
+        ctx.obj.console = Console(no_color=True)
 
 
 @cli.command()
@@ -170,21 +263,21 @@ def list_devices(check: bool):
 
 
 @cli.command()
-@click.option("--device", "-d", help="Device name or serial")
+@device_option
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def status(device: Optional[str], as_json: bool):
+@pass_context
+def status(ctx: CLIContext, device: Optional[str], as_json: bool):
     """Show device status."""
     device_config = get_device(device)
     if not device_config:
-        console.print("[red]No device found. Run 'dyson setup' first.[/red]")
-        sys.exit(1)
+        ctx.print("[red]No device found. Run 'dyson setup' first.[/red]")
+        sys.exit(EXIT_DEVICE_NOT_FOUND)
 
     try:
         from libdyson import get_device as libdyson_get_device
-        from libdyson import DEVICE_TYPE_PURE_HOT_COOL, DEVICE_TYPE_PURE_HOT_COOL_LINK
     except ImportError:
-        console.print("[red]Error: libdyson not installed.[/red]")
-        sys.exit(1)
+        ctx.print("[red]Error: libdyson not installed.[/red]")
+        sys.exit(EXIT_ERROR)
 
     dyson_device = libdyson_get_device(
         device_config["serial"],
@@ -194,14 +287,15 @@ def status(device: Optional[str], as_json: bool):
 
     ip = device_config.get("ip")
     if not ip:
-        console.print("[yellow]No IP address configured. Trying auto-discovery...[/yellow]")
+        ctx.print("[yellow]No IP address configured. Trying auto-discovery...[/yellow]")
         try:
             from libdyson.discovery import DysonDiscovery
 
-            discovery = DysonDiscovery()
-            discovery.start_discovery()
-            time.sleep(5)
-            discovery.stop_discovery()
+            with ctx.status("Discovering devices..."):
+                discovery = DysonDiscovery()
+                discovery.start_discovery()
+                time.sleep(5)
+                discovery.stop_discovery()
 
             discovered = discovery.devices
             for serial, info in discovered.items():
@@ -213,20 +307,21 @@ def status(device: Optional[str], as_json: bool):
                         if d["serial"] == serial:
                             d["ip"] = ip
                     save_config(config)
-                    console.print(f"[green]Discovered device at {ip}[/green]")
+                    ctx.print(f"[green]Discovered device at {ip}[/green]")
                     break
         except Exception as e:
-            console.print(f"[red]Discovery failed: {e}[/red]")
+            ctx.print(f"[red]Discovery failed: {e}[/red]")
 
     if not ip:
-        console.print("[red]Could not find device IP. Please add 'ip' to config manually.[/red]")
-        sys.exit(1)
+        ctx.print("[red]Could not find device IP. Please add 'ip' to config manually.[/red]")
+        sys.exit(EXIT_CONNECTION_ERROR)
 
-    console.print(f"Connecting to {device_config['name']} at {ip}...")
+    ctx.print_verbose(f"Connecting to {device_config['name']} at {ip}...")
 
     try:
-        dyson_device.connect(ip)
-        time.sleep(2)  # Wait for state update
+        with ctx.status(f"Connecting to {device_config['name']}..."):
+            dyson_device.connect(ip)
+            time.sleep(2)  # Wait for state update
 
         # Raw state for JSON output
         raw_state = {
@@ -250,7 +345,8 @@ def status(device: Optional[str], as_json: bool):
         dyson_device.disconnect()
 
         if as_json:
-            console.print(json.dumps(raw_state, indent=2))
+            # JSON goes to stdout even in quiet mode
+            print(json.dumps(raw_state, indent=2))
         else:
             table = Table(title=f"{device_config['name']}")
             table.add_column("", style="cyan")
@@ -293,7 +389,7 @@ def status(device: Optional[str], as_json: bool):
             if raw_state.get("temperature") is not None:
                 temp_c = raw_state["temperature"] - 273
                 table.add_row("Temperature", f"{temp_c:.1f}°C")
-            
+
             if raw_state.get("humidity") is not None:
                 table.add_row("Humidity", f"{raw_state['humidity']}%")
 
@@ -301,44 +397,54 @@ def status(device: Optional[str], as_json: bool):
             night = "[green]✓[/green]" if raw_state.get("night_mode") else "[dim]Off[/dim]"
             table.add_row("Night Mode", night)
 
-            console.print(table)
+            ctx.console.print(table)
 
     except Exception as e:
-        console.print(f"[red]Connection failed: {e}[/red]")
-        sys.exit(1)
+        ctx.print(f"[red]Connection failed: {e}[/red]")
+        sys.exit(EXIT_CONNECTION_ERROR)
 
 
 @cli.command()
-@click.option("--device", "-d", help="Device name or serial")
-def on(device: Optional[str]):
+@device_option
+@dry_run_option
+@pass_context
+def on(ctx: CLIContext, device: Optional[str], dry_run: bool):
     """Turn device on."""
-    _control_power(device, True)
+    _control_power(ctx, device, power_on=True, dry_run=dry_run)
 
 
 @cli.command()
-@click.option("--device", "-d", help="Device name or serial")
-def off(device: Optional[str]):
+@device_option
+@dry_run_option
+@pass_context
+def off(ctx: CLIContext, device: Optional[str], dry_run: bool):
     """Turn device off."""
-    _control_power(device, False)
+    _control_power(ctx, device, power_on=False, dry_run=dry_run)
 
 
-def _control_power(device_name: Optional[str], power_on: bool):
+def _control_power(ctx: CLIContext, device_name: Optional[str], power_on: bool, dry_run: bool = False):
     """Control device power."""
     device_config = get_device(device_name)
     if not device_config:
-        console.print("[red]No device found.[/red]")
-        sys.exit(1)
+        ctx.print("[red]No device found.[/red]")
+        sys.exit(EXIT_DEVICE_NOT_FOUND)
 
     ip = device_config.get("ip")
     if not ip:
-        console.print("[red]No IP configured. Run 'dyson status' first to discover.[/red]")
-        sys.exit(1)
+        ctx.print("[red]No IP configured. Run 'dyson status' first to discover.[/red]")
+        sys.exit(EXIT_CONNECTION_ERROR)
+
+    action = "turn on" if power_on else "turn off"
+
+    if dry_run:
+        ctx.print(f"[dim]Would {action} {device_config['name']} at {ip}[/dim]")
+        return
 
     try:
         from libdyson import get_device as libdyson_get_device
     except ImportError:
-        console.print("[red]Error: libdyson not installed.[/red]")
-        sys.exit(1)
+        ctx.print("[red]Error: libdyson not installed.[/red]")
+        sys.exit(EXIT_ERROR)
 
     dyson_device = libdyson_get_device(
         device_config["serial"],
@@ -347,21 +453,23 @@ def _control_power(device_name: Optional[str], power_on: bool):
     )
 
     try:
-        dyson_device.connect(ip)
-        time.sleep(1)
+        ctx.print_verbose(f"Connecting to {ip}...")
+        with ctx.status(f"Connecting to {device_config['name']}..."):
+            dyson_device.connect(ip)
+            time.sleep(1)
 
         if power_on:
             dyson_device.turn_on()
-            console.print(f"[green]✓ {device_config['name']} turned on[/green]")
+            ctx.print(f"[green]✓ {device_config['name']} turned on[/green]")
         else:
             dyson_device.turn_off()
-            console.print(f"[green]✓ {device_config['name']} turned off[/green]")
+            ctx.print(f"[green]✓ {device_config['name']} turned off[/green]")
 
         dyson_device.disconnect()
 
     except Exception as e:
-        console.print(f"[red]Failed: {e}[/red]")
-        sys.exit(1)
+        ctx.print(f"[red]Failed: {e}[/red]")
+        sys.exit(EXIT_CONNECTION_ERROR)
 
 
 @cli.group()
@@ -371,25 +479,31 @@ def fan():
 
 
 @fan.command("speed")
-@click.argument("speed")
-@click.option("--device", "-d", help="Device name or serial")
-def fan_speed(speed: str, device: Optional[str]):
+@click.argument("speed", callback=validate_speed)
+@device_option
+@dry_run_option
+@pass_context
+def fan_speed(ctx: CLIContext, speed: str, device: Optional[str], dry_run: bool):
     """Set fan speed (1-10 or 'auto')."""
     device_config = get_device(device)
     if not device_config:
-        console.print("[red]No device found.[/red]")
-        sys.exit(1)
+        ctx.print("[red]No device found.[/red]")
+        sys.exit(EXIT_DEVICE_NOT_FOUND)
 
     ip = device_config.get("ip")
     if not ip:
-        console.print("[red]No IP configured.[/red]")
-        sys.exit(1)
+        ctx.print("[red]No IP configured.[/red]")
+        sys.exit(EXIT_CONNECTION_ERROR)
+
+    if dry_run:
+        ctx.print(f"[dim]Would set fan speed to {speed} on {device_config['name']} at {ip}[/dim]")
+        return
 
     try:
         from libdyson import get_device as libdyson_get_device
     except ImportError:
-        console.print("[red]Error: libdyson not installed.[/red]")
-        sys.exit(1)
+        ctx.print("[red]Error: libdyson not installed.[/red]")
+        sys.exit(EXIT_ERROR)
 
     dyson_device = libdyson_get_device(
         device_config["serial"],
@@ -398,52 +512,54 @@ def fan_speed(speed: str, device: Optional[str]):
     )
 
     try:
-        dyson_device.connect(ip)
-        time.sleep(1)
+        with ctx.status(f"Connecting to {device_config['name']}..."):
+            dyson_device.connect(ip)
+            time.sleep(1)
 
         if speed.lower() == "auto":
             dyson_device.enable_auto_mode()
-            console.print("[green]✓ Fan set to auto[/green]")
+            ctx.print("[green]✓ Fan set to auto[/green]")
         else:
             speed_int = int(speed)
-            if not 1 <= speed_int <= 10:
-                console.print("[red]Speed must be 1-10 or 'auto'[/red]")
-                sys.exit(1)
             dyson_device.disable_auto_mode()
             dyson_device.set_speed(speed_int)
-            console.print(f"[green]✓ Fan speed set to {speed_int}[/green]")
+            ctx.print(f"[green]✓ Fan speed set to {speed_int}[/green]")
 
         dyson_device.disconnect()
 
-    except ValueError:
-        console.print("[red]Speed must be a number 1-10 or 'auto'[/red]")
-        sys.exit(1)
     except Exception as e:
-        console.print(f"[red]Failed: {e}[/red]")
-        sys.exit(1)
+        ctx.print(f"[red]Failed: {e}[/red]")
+        sys.exit(EXIT_CONNECTION_ERROR)
 
 
 @fan.command("oscillate")
 @click.argument("state", type=click.Choice(["on", "off"]))
 @click.option("--angle", "-a", type=int, help="Oscillation range in degrees (45, 90, 180, or 350)")
-@click.option("--device", "-d", help="Device name or serial")
-def fan_oscillate(state: str, angle: Optional[int], device: Optional[str]):
+@device_option
+@dry_run_option
+@pass_context
+def fan_oscillate(ctx: CLIContext, state: str, angle: Optional[int], device: Optional[str], dry_run: bool):
     """Enable or disable oscillation. Use --angle to set range (e.g., 90 for 90 degrees)."""
     device_config = get_device(device)
     if not device_config:
-        console.print("[red]No device found.[/red]")
-        sys.exit(1)
+        ctx.print("[red]No device found.[/red]")
+        sys.exit(EXIT_DEVICE_NOT_FOUND)
 
     ip = device_config.get("ip")
     if not ip:
-        console.print("[red]No IP configured.[/red]")
-        sys.exit(1)
+        ctx.print("[red]No IP configured.[/red]")
+        sys.exit(EXIT_CONNECTION_ERROR)
+
+    if dry_run:
+        action = f"enable oscillation{f' ({angle}°)' if angle else ''}" if state == "on" else "disable oscillation"
+        ctx.print(f"[dim]Would {action} on {device_config['name']} at {ip}[/dim]")
+        return
 
     try:
         from libdyson import get_device as libdyson_get_device
     except ImportError:
-        console.print("[red]Error: libdyson not installed.[/red]")
-        sys.exit(1)
+        ctx.print("[red]Error: libdyson not installed.[/red]")
+        sys.exit(EXIT_ERROR)
 
     dyson_device = libdyson_get_device(
         device_config["serial"],
@@ -452,8 +568,9 @@ def fan_oscillate(state: str, angle: Optional[int], device: Optional[str]):
     )
 
     try:
-        dyson_device.connect(ip)
-        time.sleep(1)
+        with ctx.status(f"Connecting to {device_config['name']}..."):
+            dyson_device.connect(ip)
+            time.sleep(1)
 
         if state == "on":
             if angle:
@@ -463,19 +580,19 @@ def fan_oscillate(state: str, angle: Optional[int], device: Optional[str]):
                 angle_low = max(5, center - half)
                 angle_high = min(355, center + half)
                 dyson_device.enable_oscillation(angle_low=angle_low, angle_high=angle_high)
-                console.print(f"[green]✓ Oscillation enabled ({angle}° range)[/green]")
+                ctx.print(f"[green]✓ Oscillation enabled ({angle}° range)[/green]")
             else:
                 dyson_device.enable_oscillation()
-                console.print("[green]✓ Oscillation enabled[/green]")
+                ctx.print("[green]✓ Oscillation enabled[/green]")
         else:
             dyson_device.disable_oscillation()
-            console.print("[green]✓ Oscillation disabled[/green]")
+            ctx.print("[green]✓ Oscillation disabled[/green]")
 
         dyson_device.disconnect()
 
     except Exception as e:
-        console.print(f"[red]Failed: {e}[/red]")
-        sys.exit(1)
+        ctx.print(f"[red]Failed: {e}[/red]")
+        sys.exit(EXIT_CONNECTION_ERROR)
 
 
 @cli.group()
@@ -485,36 +602,46 @@ def heat():
 
 
 @heat.command("on")
-@click.option("--device", "-d", help="Device name or serial")
-def heat_on(device: Optional[str]):
+@device_option
+@dry_run_option
+@pass_context
+def heat_on(ctx: CLIContext, device: Optional[str], dry_run: bool):
     """Enable heat mode."""
-    _control_heat(device, True)
+    _control_heat(ctx, device, enable=True, dry_run=dry_run)
 
 
 @heat.command("off")
-@click.option("--device", "-d", help="Device name or serial")
-def heat_off(device: Optional[str]):
+@device_option
+@dry_run_option
+@pass_context
+def heat_off(ctx: CLIContext, device: Optional[str], dry_run: bool):
     """Disable heat mode."""
-    _control_heat(device, False)
+    _control_heat(ctx, device, enable=False, dry_run=dry_run)
 
 
-def _control_heat(device_name: Optional[str], enable: bool):
+def _control_heat(ctx: CLIContext, device_name: Optional[str], enable: bool, dry_run: bool = False):
     """Control heat mode."""
     device_config = get_device(device_name)
     if not device_config:
-        console.print("[red]No device found.[/red]")
-        sys.exit(1)
+        ctx.print("[red]No device found.[/red]")
+        sys.exit(EXIT_DEVICE_NOT_FOUND)
 
     ip = device_config.get("ip")
     if not ip:
-        console.print("[red]No IP configured.[/red]")
-        sys.exit(1)
+        ctx.print("[red]No IP configured.[/red]")
+        sys.exit(EXIT_CONNECTION_ERROR)
+
+    action = "enable heat mode" if enable else "disable heat mode"
+
+    if dry_run:
+        ctx.print(f"[dim]Would {action} on {device_config['name']} at {ip}[/dim]")
+        return
 
     try:
         from libdyson import get_device as libdyson_get_device
     except ImportError:
-        console.print("[red]Error: libdyson not installed.[/red]")
-        sys.exit(1)
+        ctx.print("[red]Error: libdyson not installed.[/red]")
+        sys.exit(EXIT_ERROR)
 
     dyson_device = libdyson_get_device(
         device_config["serial"],
@@ -523,51 +650,63 @@ def _control_heat(device_name: Optional[str], enable: bool):
     )
 
     try:
-        dyson_device.connect(ip)
-        time.sleep(1)
+        with ctx.status(f"Connecting to {device_config['name']}..."):
+            dyson_device.connect(ip)
+            time.sleep(1)
 
         if not hasattr(dyson_device, "enable_heat_mode"):
-            console.print("[red]This device does not support heat mode.[/red]")
-            sys.exit(1)
+            ctx.print("[red]This device does not support heat mode.[/red]")
+            sys.exit(EXIT_ERROR)
 
         if enable:
             dyson_device.enable_heat_mode()
-            console.print("[green]✓ Heat mode enabled[/green]")
+            ctx.print("[green]✓ Heat mode enabled[/green]")
         else:
             dyson_device.disable_heat_mode()
-            console.print("[green]✓ Heat mode disabled[/green]")
+            ctx.print("[green]✓ Heat mode disabled[/green]")
 
         dyson_device.disconnect()
 
     except Exception as e:
-        console.print(f"[red]Failed: {e}[/red]")
-        sys.exit(1)
+        ctx.print(f"[red]Failed: {e}[/red]")
+        sys.exit(EXIT_CONNECTION_ERROR)
+
+
+def validate_temperature(ctx, param, value):
+    """Validate temperature argument early."""
+    if value is None:
+        return value
+    if not 1 <= value <= 37:
+        raise click.BadParameter("Temperature must be between 1 and 37°C")
+    return value
 
 
 @heat.command("target")
-@click.argument("temperature", type=int)
-@click.option("--device", "-d", help="Device name or serial")
-def heat_target(temperature: int, device: Optional[str]):
+@click.argument("temperature", type=int, callback=validate_temperature)
+@device_option
+@dry_run_option
+@pass_context
+def heat_target(ctx: CLIContext, temperature: int, device: Optional[str], dry_run: bool):
     """Set target temperature in Celsius (1-37)."""
     device_config = get_device(device)
     if not device_config:
-        console.print("[red]No device found.[/red]")
-        sys.exit(1)
+        ctx.print("[red]No device found.[/red]")
+        sys.exit(EXIT_DEVICE_NOT_FOUND)
 
     ip = device_config.get("ip")
     if not ip:
-        console.print("[red]No IP configured.[/red]")
-        sys.exit(1)
+        ctx.print("[red]No IP configured.[/red]")
+        sys.exit(EXIT_CONNECTION_ERROR)
 
-    if not 1 <= temperature <= 37:
-        console.print("[red]Temperature must be between 1 and 37°C[/red]")
-        sys.exit(1)
+    if dry_run:
+        ctx.print(f"[dim]Would set target temperature to {temperature}°C on {device_config['name']} at {ip}[/dim]")
+        return
 
     try:
         from libdyson import get_device as libdyson_get_device
     except ImportError:
-        console.print("[red]Error: libdyson not installed.[/red]")
-        sys.exit(1)
+        ctx.print("[red]Error: libdyson not installed.[/red]")
+        sys.exit(EXIT_ERROR)
 
     dyson_device = libdyson_get_device(
         device_config["serial"],
@@ -576,44 +715,54 @@ def heat_target(temperature: int, device: Optional[str]):
     )
 
     try:
-        dyson_device.connect(ip)
-        time.sleep(1)
+        with ctx.status(f"Connecting to {device_config['name']}..."):
+            dyson_device.connect(ip)
+            time.sleep(1)
 
         if not hasattr(dyson_device, "set_heat_target"):
-            console.print("[red]This device does not support heat target.[/red]")
-            sys.exit(1)
+            ctx.print("[red]This device does not support heat target.[/red]")
+            sys.exit(EXIT_ERROR)
 
         # libdyson uses Kelvin internally
         dyson_device.set_heat_target(temperature + 273)
-        console.print(f"[green]✓ Target temperature set to {temperature}°C[/green]")
+        ctx.print(f"[green]✓ Target temperature set to {temperature}°C[/green]")
 
         dyson_device.disconnect()
 
     except Exception as e:
-        console.print(f"[red]Failed: {e}[/red]")
-        sys.exit(1)
+        ctx.print(f"[red]Failed: {e}[/red]")
+        sys.exit(EXIT_CONNECTION_ERROR)
 
 
 @cli.command()
 @click.argument("state", type=click.Choice(["on", "off"]))
-@click.option("--device", "-d", help="Device name or serial")
-def night(state: str, device: Optional[str]):
+@device_option
+@dry_run_option
+@pass_context
+def night(ctx: CLIContext, state: str, device: Optional[str], dry_run: bool):
     """Enable or disable night mode."""
     device_config = get_device(device)
     if not device_config:
-        console.print("[red]No device found.[/red]")
-        sys.exit(1)
+        ctx.print("[red]No device found.[/red]")
+        sys.exit(EXIT_DEVICE_NOT_FOUND)
 
     ip = device_config.get("ip")
     if not ip:
-        console.print("[red]No IP configured.[/red]")
-        sys.exit(1)
+        ctx.print("[red]No IP configured.[/red]")
+        sys.exit(EXIT_CONNECTION_ERROR)
+
+    enable = state == "on"
+    action = "enable night mode" if enable else "disable night mode"
+
+    if dry_run:
+        ctx.print(f"[dim]Would {action} on {device_config['name']} at {ip}[/dim]")
+        return
 
     try:
         from libdyson import get_device as libdyson_get_device
     except ImportError:
-        console.print("[red]Error: libdyson not installed.[/red]")
-        sys.exit(1)
+        ctx.print("[red]Error: libdyson not installed.[/red]")
+        sys.exit(EXIT_ERROR)
 
     dyson_device = libdyson_get_device(
         device_config["serial"],
@@ -622,63 +771,65 @@ def night(state: str, device: Optional[str]):
     )
 
     try:
-        dyson_device.connect(ip)
-        time.sleep(1)
+        with ctx.status(f"Connecting to {device_config['name']}..."):
+            dyson_device.connect(ip)
+            time.sleep(1)
 
-        enable = state == "on"
         dyson_device.enable_night_mode() if enable else dyson_device.disable_night_mode()
-        console.print(f"[green]✓ Night mode {'enabled' if enable else 'disabled'}[/green]")
+        ctx.print(f"[green]✓ Night mode {'enabled' if enable else 'disabled'}[/green]")
 
         dyson_device.disconnect()
 
     except Exception as e:
-        console.print(f"[red]Failed: {e}[/red]")
-        sys.exit(1)
+        ctx.print(f"[red]Failed: {e}[/red]")
+        sys.exit(EXIT_CONNECTION_ERROR)
 
 
 @cli.command("default")
 @click.argument("name")
-def set_default(name: str):
+@pass_context
+def set_default(ctx: CLIContext, name: str):
     """Set the default device."""
     if set_default_device(name):
-        console.print(f"[green]✓ Default device set to {name}[/green]")
+        ctx.print(f"[green]✓ Default device set to {name}[/green]")
     else:
-        console.print(f"[red]Device '{name}' not found.[/red]")
-        sys.exit(1)
+        ctx.print(f"[red]Device '{name}' not found.[/red]")
+        sys.exit(EXIT_DEVICE_NOT_FOUND)
 
 
 @cli.command("remove")
 @click.argument("name")
 @click.option("--force", "-f", is_flag=True, help="Skip confirmation")
-def remove_device(name: str, force: bool):
+@pass_context
+def remove_device(ctx: CLIContext, name: str, force: bool):
     """Remove a device from the config."""
     config = load_config()
     devices = config.get("devices", [])
-    
+
     # Find device
     device = None
     for d in devices:
         if d.get("name", "").lower() == name.lower() or d.get("serial", "").lower() == name.lower():
             device = d
             break
-    
+
     if not device:
-        console.print(f"[red]Device '{name}' not found.[/red]")
-        sys.exit(1)
-    
+        ctx.print(f"[red]Device '{name}' not found.[/red]")
+        sys.exit(EXIT_DEVICE_NOT_FOUND)
+
     if not force:
         if not click.confirm(f"Remove {device.get('name')} ({device.get('serial')})?"):
-            console.print("Cancelled.")
+            ctx.print("Cancelled.")
             return
-    
+
     config["devices"] = [d for d in devices if d.get("serial") != device.get("serial")]
-    
+
     # Update default if needed
     if config.get("default_device") == device.get("name"):
         config["default_device"] = config["devices"][0]["name"] if config["devices"] else None
-    
+
     save_config(config)
-    console.print(f"[green]✓ Removed {device.get('name')}[/green]")
+    ctx.print(f"[green]✓ Removed {device.get('name')}[/green]")
 
 
 if __name__ == "__main__":
